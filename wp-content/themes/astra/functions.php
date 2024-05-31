@@ -187,9 +187,9 @@ require_once ASTRA_THEME_DIR . 'inc/core/deprecated/deprecated-functions.php';
 function custom_wpforms_user_registration($fields, $entry, $form_data) {
     // Change 123 to your form ID
     if ($form_data['id'] == 1290) {
-        $username = sanitize_text_field($fields[1]['value']); // Adjust the index based on your form
-        $email = sanitize_email($fields[2]['value']); // Adjust the index based on your form
-        $password = sanitize_text_field($fields[3]['value']); // Adjust the index based on your form
+        $username = sanitize_text_field($fields[2]['value']); // Adjust the index based on your form
+        $email = sanitize_email($fields[3]['value']); // Adjust the index based on your form
+        $password = sanitize_text_field($fields[4]['value']); // Adjust the index based on your form
 
         $user_id = wp_create_user($username, $password, $email);
 
@@ -206,29 +206,156 @@ function custom_wpforms_user_registration($fields, $entry, $form_data) {
     }
 }
 add_action('wpforms_process_complete', 'custom_wpforms_user_registration', 10, 3);
+function custom_wpforms_login_handler() {
+    if (isset($_POST['wpforms']['fields']['4']) && $_POST['wpforms']['fields']['4'] === 'custom_login') {
+        // Debug log
+        error_log('WPForms custom login handler triggered.');
 
+        $username = sanitize_text_field($_POST['wpforms']['fields']['3']);
+        $password = sanitize_text_field($_POST['wpforms']['fields']['2']);
 
-function custom_wpforms_user_login($fields, $entry, $form_data) {
-    // Change 124 to your login form ID
-    if ($form_data['id'] == 1299) {
-        $username = sanitize_text_field($fields[0]['value']); // Adjust the index based on your form
-        $password = sanitize_text_field($fields[1]['value']); // Adjust the index based on your form
-
-        $creds = array(
-            'user_login' => $username,
+        $credentials = array(
+            'user_login'    => $username,
             'user_password' => $password,
-            'remember' => true
+            'remember'      => true,
         );
 
-        $user = wp_signon($creds, false);
+        $user = wp_signon($credentials, false);
 
         if (is_wp_error($user)) {
-            // Handle errors
-            error_log('User login error: ' . $user->get_error_message());
+            error_log('Login failed: ' . $user->get_error_message());
+            wp_redirect(home_url('https://localhost/InkTradeLibrary/login/'));
+            exit; // Add exit statement here
         } else {
-            wp_redirect(home_url());
-            exit;
+            wp_set_current_user($user->ID);
+            wp_set_auth_cookie($user->ID);
+
+            if (in_array('administrator', $user->roles)) {
+                wp_redirect(home_url('/'));
+                exit; // Add exit statement here
+            } else {
+                wp_redirect(home_url('/'));
+            }
         }
     }
 }
-add_action('wpforms_process_complete', 'custom_wpforms_user_login', 10, 3);
+add_action('init', 'custom_wpforms_login_handler');
+function enqueue_custom_scripts() {
+    wp_enqueue_script('custom-script', get_template_directory_uri() . '/js/custom-script.js', array('jquery'), '1.0.0', true);
+
+    // Pass user login status to JavaScript
+    wp_localize_script('custom-script', 'wpData', array(
+        'userLoggedIn' => is_user_logged_in() ? 'true' : 'false'
+    ));
+}
+add_action('wp_enqueue_scripts', 'enqueue_custom_scripts');
+function register_genre_taxonomy() {
+    $args = array(
+        'label' => __('Genres'),
+        'public' => true,
+     	 'hierarchical' => true,
+        'show_ui' => true,
+        'show_in_menu' => true,
+        'show_admin_column' => true,
+		 'show_in_rest' => true, 
+        'rewrite' => array('slug' => 'genre'),
+    );
+
+    register_taxonomy('genre', array('books'), $args); // Register taxonomy with ACF field name
+}
+add_action('init', 'register_genre_taxonomy');
+
+// Display ACF Form
+function display_acf_form() {
+    ob_start();
+    
+    acf_form(array(
+        'post_id' => 'new_post',
+        'post_title' => 'field_66583d42317df',
+        'post_content' => 'field_66583d8061dbe',
+     
+        'new_post' => array(
+            'post_type' => 'books',
+            'post_status' => 'publish',
+           
+        ),
+         'field_groups' => array('group_66582215de319'), // Your actual field group ID
+        'submit_value' => 'Submit Book',
+    ));
+    
+    return ob_get_clean();
+}
+add_shortcode('acf_book_form', 'display_acf_form');
+// Register custom taxonomy for book authors
+function register_book_author_taxonomy() {
+    $args = array(
+        'label' => __('book_author'),
+        'public' => true,
+        'hierarchical' => false,
+        'show_ui' => true,
+        'show_in_menu' => true,
+        'show_admin_column' => true,
+        'show_in_rest' => true,
+        'rewrite' => array('slug' => 'book_author'),
+    );
+
+    register_taxonomy('book_author', array('books'), $args); // Register taxonomy with 'books' post type
+}
+add_action('init', 'register_book_author_taxonomy');
+// Register custom post type for users
+function register_custom_user_post_type() {
+    register_post_type('custom_user', array(
+        'label' => 'Users',
+        'public' => false, // Set to false to hide from admin menus
+        'exclude_from_search' => true,
+        'show_ui' => true,
+        'show_in_menu' => true,
+        'supports' => array('title'),
+    ));
+}
+add_action('init', 'register_custom_user_post_type');
+
+// Save the selected user ID when saving the post
+function save_book_author_field($post_id) {
+    // Check if this is the book_author field for the books post type
+    if ('books' === get_post_type($post_id)) {
+        $selected_user_id = get_field('field_66599f467efbb', $post_id); // Get the selected user ID from the field
+        update_post_meta($post_id, '_selected_user_id', $selected_user_id); // Save the selected user ID as post meta
+    }
+}
+add_action('acf/save_post', 'save_book_author_field', 20); // Priority should be higher than the ACF default (10)
+
+// Add custom columns to the book post type table
+function custom_book_columns($columns) {
+    $columns['taxonomy-genre'] = 'Genres'; // Add a new column for genres
+    $columns['book_author'] = 'book_author'; // Add a new column for selected author
+    return $columns;
+}
+add_filter('manage_books_posts_columns', 'custom_book_columns');
+
+
+
+// Display the custom column content
+function custom_book_column_content($column, $post_id) {
+    if ($column == 'taxonomy-genre') {
+        // If no genres are found using get_the_terms, check ACF field value
+        $acf_genre = get_field('field_665822160f7a1', $post_id); // Retrieve ACF genre taxonomy value
+        if (!empty($acf_genre)) {
+            echo $acf_genre;
+        } else {
+            echo '—'; // Display a dash if no genres are found
+        }
+    }
+    
+    if ($column == 'book_author') {
+     
+        $author_info = get_field('field_66599f467efbb', $post_id);
+        if ($author_info) {
+            echo $author_info;
+        } else {
+            echo '—';
+        }
+    
+    }
+}
+add_action('manage_books_posts_custom_column', 'custom_book_column_content', 10, 2);
